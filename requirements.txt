@@ -1,5 +1,6 @@
-pymatgen
 numpy
 pandas
 matplotlib
 scikit-learn
+pymatgen
+scipy

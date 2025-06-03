@@ -32,11 +32,12 @@ Please refer to the individual scripts for specific `argparse` options or intern
 
 The primary Python libraries required are:
 
-*   `pymatgen`
 *   `numpy`
 *   `pandas`
 *   `matplotlib`
 *   `scikit-learn`
+*   `pymatgen`
+*   `scipy`
 
 A `requirements.txt` file is provided for easy installation of dependencies:
 ```bash
