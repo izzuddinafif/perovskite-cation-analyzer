@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import itertools
 from string import Template
 import numpy as np
+
 # Base lattice parameter
 BASE_LATTICE = 6.27514
 
@@ -147,52 +148,6 @@ def get_symmetry_operations() -> List[np.ndarray]:
     
     return all_ops
 
-def get_canonical_form(coords: List[Coordinate], ops: List[np.ndarray], system_size=2) -> Tuple[float, ...]:
-    """Get canonical form of coordinates considering symmetry.
-    
-    Optimized version that bails out early when a lexicographically smaller form is found.
-    """
-    # Use the first transformed configuration as initial minimum
-    transformed_min = None
-    form_min = None
-    
-    # Apply symmetry operations
-    for op in ops:
-        transformed = []
-        valid = True
-        
-        # Apply symmetry operation to all coordinates
-        for coord in coords:
-            point = np.array([coord.x, coord.y, coord.z])
-            rotated = op @ point
-            x, y, z = (normalize_coordinate(v) for v in rotated)
-            
-            # Apply normalization specific to the crystal system
-            x = normalize_for_system(x, system_size)
-            
-            # Validate coordinates
-            if not (0 <= y < 1 and 0 <= z < 1):
-                valid = False
-                break
-            
-            transformed.append(Coordinate(x, normalize_coordinate(y), normalize_coordinate(z)))
-        
-        if not valid:
-            continue
-            
-        # Sort coordinates for consistent ordering
-        transformed.sort()
-        
-        # Create tuple form for comparison
-        form = tuple(coord for c in transformed for coord in (c.x, c.y, c.z))
-        
-        # Early termination logic - keep track of minimum form
-        if form_min is None or form < form_min:
-            form_min = form
-            transformed_min = transformed.copy()
-    
-    return form_min if form_min else tuple()
-
 def generate_all_positions(system_size=2) -> List[Coordinate]:
     """Generate all possible Cs positions based on system size.
     
@@ -285,145 +240,344 @@ def generate_i_positions(system_size=2) -> List[Coordinate]:
     else:
         raise ValueError(f"Unsupported system size: {system_size}")
 
-# Global variables for multiprocessing support
-_all_positions = None
-_symmetry_ops = None
-_system_size = 2
-
-def init_worker(all_positions, symmetry_ops, system_size):
-    """Initialize worker process with shared data.
+def normalize_for_system(x: float, system_size=2) -> float:
+    """Normalize coordinate based on the system size.
     
-    This function is called once per worker to set up its global state.
+    For 2x2x2 system, normalize x to 0.25 or 0.75
+    For 3x3x3 system, normalize to 1/6, 3/6, 5/6
     """
-    global _all_positions, _symmetry_ops, _system_size
-    _all_positions = all_positions
-    _symmetry_ops = symmetry_ops
-    _system_size = system_size
+    if system_size == 2:
+        # For 2x2x2, we have 0.25 and 0.75 as possible x values
+        return 0.25 if abs(x - 0.25) < abs(x - 0.75) else 0.75
+    elif system_size == 3:
+        # For 3x3x3, we have values at 1/6, 3/6, 5/6
+        possible_values = [1/6, 3/6, 5/6]
+        distances = [abs(x - val) for val in possible_values]
+        return possible_values[distances.index(min(distances))]
+    else:
+        # Default behavior for other system sizes
+        return x
 
-def process_config(config):
-    """Process a single configuration to find its canonical form.
+def is_fixed_by_operation(config: List[Coordinate], symmetry_op: np.ndarray, system_size=2) -> bool:
+    """Check if a configuration is fixed (unchanged) by a symmetry operation.
+    
+    This is the core function for Burnside's lemma - it determines if applying
+    a symmetry operation to a configuration results in the same configuration.
     
     Args:
-        config: A tuple of coordinates representing a configuration
+        config: Configuration to check
+        symmetry_op: Symmetry operation matrix
+        system_size: Size of the system
         
     Returns:
-        tuple: (canonical_form, configuration) or (None, None) if invalid
+        True if configuration is unchanged by the symmetry operation
     """
-    global _symmetry_ops, _system_size
+    transformed_coords = []
     
-    # Convert to list for manipulation
-    config_list = list(config)
+    for coord in config:
+        point = np.array([coord.x, coord.y, coord.z])
+        rotated = symmetry_op @ point
+        x, y, z = (normalize_coordinate(v) for v in rotated)
+        x = normalize_for_system(x, system_size)
+        
+        # Validate coordinates
+        if not (0 <= y < 1 and 0 <= z < 1):
+            return False
+            
+        transformed_coords.append(Coordinate(x, normalize_coordinate(y), normalize_coordinate(z)))
     
-    # Get canonical form as orbit identifier
-    canonical = get_canonical_form(config_list, _symmetry_ops, _system_size)
+    # Sort both for comparison - a configuration is fixed if the transformed
+    # coordinates are the same set as the original coordinates
+    original_sorted = sorted(config)
+    transformed_sorted = sorted(transformed_coords)
     
-    if canonical:
-        return canonical, config_list
-    return None, None
+    return original_sorted == transformed_sorted
 
-def process_batch(batch_configs):
-    """Process a batch of configurations.
+def count_fixed_by_operation(symmetry_op: np.ndarray, num_cs: int, system_size=2) -> int:
+    """Count configurations fixed by a specific symmetry operation.
+    
+    This implements the |X^g| part of Burnside's lemma formula.
     
     Args:
-        batch_configs: List of configurations to process
+        symmetry_op: The symmetry operation to test
+        num_cs: Number of Cs atoms in configuration
+        system_size: Size of the system
         
     Returns:
-        dict: Dictionary mapping canonical forms to configuration lists
+        Number of configurations that are unchanged by this symmetry operation
     """
-    global _system_size
+    all_positions = generate_all_positions(system_size)
+    fixed_count = 0
     
-    batch_results = {}
-    for config in batch_configs:
-        canonical, config_list = process_config(config)
-        if canonical and canonical not in batch_results:
-            batch_results[canonical] = config_list
-    return batch_results
+    # Check all possible configurations of num_cs atoms
+    for config in itertools.combinations(all_positions, num_cs):
+        if is_fixed_by_operation(list(config), symmetry_op, system_size):
+            fixed_count += 1
+    
+    return fixed_count
+
+def apply_burnside_lemma(num_cs: int, system_size=2) -> int:
+    """Apply Burnside's lemma to count unique configurations.
+    
+    Burnside's lemma: |X/G| = (1/|G|) * Σ_{g∈G} |X^g|
+    
+    Where:
+    - X is the set of all configurations
+    - G is the group of symmetry operations  
+    - X^g is the set of configurations fixed by operation g
+    - |X^g| is the number of configurations fixed by g
+    
+    Args:
+        num_cs: Number of Cs atoms to place
+        system_size: Size of the system
+        
+    Returns:
+        Number of unique configurations according to Burnside's lemma
+    """
+    symmetry_ops = get_symmetry_operations()
+    total_fixed = 0
+    
+    print(f"Applying Burnside's lemma with {len(symmetry_ops)} symmetry operations...")
+    print("Counting fixed points for each symmetry operation:")
+    
+    # For each symmetry operation g in G, count |X^g|
+    for i, op in enumerate(symmetry_ops):
+        fixed_count = count_fixed_by_operation(op, num_cs, system_size)
+        total_fixed += fixed_count
+        
+        # Progress reporting
+        if (i + 1) % 12 == 0 or (i + 1) == len(symmetry_ops):
+            print(f"  Processed {i + 1}/{len(symmetry_ops)} operations, total fixed points so far: {total_fixed}")
+    
+    # Apply Burnside's formula: |X/G| = (1/|G|) * Σ|X^g|
+    unique_count = total_fixed // len(symmetry_ops)
+    
+    print(f"\nBurnside's lemma calculation:")
+    print(f"  Total fixed points across all operations: {total_fixed}")
+    print(f"  Number of symmetry operations |G|: {len(symmetry_ops)}")
+    print(f"  Unique configurations |X/G|: {total_fixed} / {len(symmetry_ops)} = {unique_count}")
+    
+    return unique_count
+
+def get_canonical_form(coords: List[Coordinate], ops: List[np.ndarray], system_size=2) -> Tuple[float, ...]:
+    """Get canonical form of coordinates considering symmetry.
+    
+    This is used as a supplementary method to generate actual configuration representatives
+    after Burnside's lemma gives us the count.
+    """
+    # Use the first transformed configuration as initial minimum
+    transformed_min = None
+    form_min = None
+    
+    # Apply symmetry operations
+    for op in ops:
+        transformed = []
+        valid = True
+        
+        # Apply symmetry operation to all coordinates
+        for coord in coords:
+            point = np.array([coord.x, coord.y, coord.z])
+            rotated = op @ point
+            x, y, z = (normalize_coordinate(v) for v in rotated)
+            
+            # Apply normalization specific to the crystal system
+            x = normalize_for_system(x, system_size)
+            
+            # Validate coordinates
+            if not (0 <= y < 1 and 0 <= z < 1):
+                valid = False
+                break
+            
+            transformed.append(Coordinate(x, normalize_coordinate(y), normalize_coordinate(z)))
+        
+        if not valid:
+            continue
+            
+        # Sort coordinates for consistent ordering
+        transformed.sort()
+        
+        # Create tuple form for comparison
+        form = tuple(coord for c in transformed for coord in (c.x, c.y, c.z))
+        
+        # Early termination logic - keep track of minimum form
+        if form_min is None or form < form_min:
+            form_min = form
+            transformed_min = transformed.copy()
+    
+    return form_min if form_min else tuple()
+
+def generate_configuration_representatives(num_cs: int, system_size=2) -> List[List[Coordinate]]:
+    """Generate representative configurations for each orbit using canonical forms.
+    
+    This supplements Burnside's lemma by actually generating the unique configurations,
+    since Burnside's lemma only gives us the count.
+    
+    Args:
+        num_cs: Number of Cs atoms to place
+        system_size: Size of the system
+        
+    Returns:
+        List of representative configurations
+    """
+    all_positions = generate_all_positions(system_size)
+    symmetry_ops = get_symmetry_operations()
+    
+    print(f"Generating configuration representatives...")
+    print(f"Total possible Cs positions: {len(all_positions)}")
+    
+    # Calculate total number of configurations for reporting
+    from math import comb
+    total_configs = comb(len(all_positions), num_cs)
+    print(f"Total configurations before symmetry: {total_configs}")
+    
+    # Dictionary to store orbit representatives using canonical forms
+    orbit_representatives = {}
+    
+    # Process configurations to find unique representatives
+    processed = 0
+    milestone = max(1, total_configs // 100)  # Report progress every 1%
+    
+    for config in itertools.combinations(all_positions, num_cs):
+        # Get canonical form as orbit identifier
+        canonical = get_canonical_form(list(config), symmetry_ops, system_size)
+        
+        if canonical and canonical not in orbit_representatives:
+            orbit_representatives[canonical] = list(config)
+        
+        # Report progress
+        processed += 1
+        if processed % milestone == 0 or processed == total_configs:
+            percentage = (processed / total_configs) * 100
+            print(f"  Progress: {processed}/{total_configs} ({percentage:.1f}%), found {len(orbit_representatives)} representatives")
+    
+    unique_configs = list(orbit_representatives.values())
+    print(f"Found {len(unique_configs)} unique configuration representatives")
+    
+    return unique_configs
 
 def generate_unique_configurations(num_cs: int, system_size=2, use_multiprocessing=False) -> List[List[Coordinate]]:
-    """Generate all unique configurations using Burnside's Lemma with optimizations.
+    """Generate all unique configurations using Burnside's lemma with verification.
+    
+    This function implements a hybrid approach:
+    1. Uses Burnside's lemma to predict the number of unique configurations
+    2. Uses canonical form enumeration to generate the actual representative configurations
+    3. Verifies that both methods agree on the count
     
     Args:
         num_cs: Number of Cs atoms to place
         system_size: Size of the system (2 for 2x2x2, 3 for 3x3x3)
-        use_multiprocessing: Whether to use multiprocessing for parallel computation
+        use_multiprocessing: Whether to use multiprocessing (kept for compatibility)
         
     Returns:
         List of unique configurations as lists of Coordinate objects
     """
-    global _all_positions, _symmetry_ops, _system_size
+    print("=" * 80)
+    print("GENERATING UNIQUE CONFIGURATIONS USING BURNSIDE'S LEMMA")
+    print("=" * 80)
     
-    # Initialize variables in the main process
-    _system_size = system_size
-    _all_positions = generate_all_positions(system_size)
-    _symmetry_ops = get_symmetry_operations()
+    # Step 1: Apply Burnside's lemma to get the theoretical count
+    print("\nStep 1: Applying Burnside's lemma to count unique configurations")
+    burnside_count = apply_burnside_lemma(num_cs, system_size)
     
-    print(f"Total possible Cs positions: {len(_all_positions)}")
-    print(f"Total symmetry operations: {len(_symmetry_ops)}")
+    # Step 2: Generate actual representative configurations
+    print(f"\nStep 2: Generating {burnside_count} representative configurations")
+    unique_configs = generate_configuration_representatives(num_cs, system_size)
     
-    # Calculate total number of configurations for reporting
-    from math import comb
-    total_configs = comb(len(_all_positions), num_cs)
-    print(f"Total configurations before symmetry: {total_configs}")
+    # Step 3: Verify that both methods agree
+    print(f"\nStep 3: Verification")
+    print(f"  Burnside's lemma predicted: {burnside_count} unique configurations")
+    print(f"  Configuration generation found: {len(unique_configs)} unique configurations")
     
-    # Dictionary to store orbit representatives
-    orbit_representatives = {}
-    
-    # Check if we should use multiprocessing
-    if use_multiprocessing:
-        import multiprocessing as mp
-        from multiprocessing import Pool
-        print(f"Using multiprocessing with {mp.cpu_count()} cores")
-        
-        # Generate all configurations 
-        all_configs = list(itertools.combinations(_all_positions, num_cs))
-        
-        # Determine batch size based on total configurations
-        batch_size = max(1, min(10000, len(all_configs) // (mp.cpu_count() * 2)))
-        batch_size = max(1, batch_size)  # Ensure at least one configuration per batch
-        
-        batches = [all_configs[i:i+batch_size] for i in range(0, len(all_configs), batch_size)]
-        print(f"Processing {len(batches)} batches of size {batch_size}")
-        
-        # Process batches in parallel, initializing each worker with the necessary data
-        with Pool(initializer=init_worker, 
-                  initargs=(_all_positions, _symmetry_ops, _system_size)) as pool:
-            for i, batch_result in enumerate(pool.imap_unordered(process_batch, batches)):
-                if (i+1) % 10 == 0 or (i+1) == len(batches):
-                    print(f"Processed batch {i+1}/{len(batches)}, found {len(orbit_representatives)} unique configs")
-                orbit_representatives.update(batch_result)
+    if len(unique_configs) == burnside_count:
+        print(f"  ✓ VERIFICATION PASSED: Both methods agree!")
     else:
-        # Single process implementation with optimization
-        print("Using single process mode")
-        
-        # Show progress indicator
-        from itertools import islice
-        processed = 0
-        milestone = max(1, total_configs // 100)  # Report progress every 1% or at least every configuration
-        
-        # Process configurations
-        for config in itertools.combinations(_all_positions, num_cs):
-            canonical, config_list = process_config(config)
-            if canonical and canonical not in orbit_representatives:
-                orbit_representatives[canonical] = config_list
-            
-            # Report progress
-            processed += 1
-            if processed % milestone == 0 or processed == total_configs:
-                percentage = (processed / total_configs) * 100
-                print(f"Progress: {processed}/{total_configs} ({percentage:.1f}%), found {len(orbit_representatives)} unique configs")
+        print(f"  ✗ VERIFICATION FAILED: Counts do not match!")
+        print(f"    This could indicate an error in implementation or edge case handling.")
     
-    # Get final list of unique configurations
-    unique_configs = list(orbit_representatives.values())
-    
-    # Print some sample configurations
-    print(f"\nFound {len(unique_configs)} unique configurations")
-    num_to_show = min(4, len(unique_configs))
+    # Show some sample configurations
+    print(f"\nSample configurations:")
+    num_to_show = min(3, len(unique_configs))
     for i, config in enumerate(unique_configs[:num_to_show], 1):
-        print(f"\nConfiguration {i}:")
+        print(f"  Configuration {i}:")
         for coord in config:
-            print(f"  Cs at ({coord.x:.3f}, {coord.y:.3f}, {coord.z:.3f})")
+            print(f"    Cs at ({coord.x:.3f}, {coord.y:.3f}, {coord.z:.3f})")
     
     return unique_configs
+
+def verify_uniqueness(unique_configs: List[List[Coordinate]], system_size=2) -> dict:
+    """Verify that the configurations are all unique and non-equivalent under symmetry.
+    
+    This function performs several checks:
+    1. No two configurations are equivalent under symmetry operations
+    2. Each configuration has the expected number of atoms
+    3. Validates against Burnside's lemma prediction
+    
+    Args:
+        unique_configs: List of configurations to verify
+        system_size: Size of the system (2 for 2x2x2, 3 for 3x3x3)
+    
+    Returns:
+        Dict with verification results
+    """
+    if not unique_configs:
+        return {
+            "status": "failed",
+            "message": "No configurations to verify",
+            "equal_pairs": []
+        }
+    
+    # Get symmetry operations
+    symmetry_ops = get_symmetry_operations()
+    
+    # Check that all configurations have the same number of atoms
+    num_cs = len(unique_configs[0])
+    if not all(len(config) == num_cs for config in unique_configs):
+        return {
+            "status": "failed",
+            "message": "Not all configurations have the same number of atoms",
+            "equal_pairs": []
+        }
+    
+    # Apply Burnside's lemma to get expected count
+    expected_unique = apply_burnside_lemma(num_cs, system_size)
+    
+    # Check for duplicates/equivalent configurations using canonical forms
+    equal_pairs = []
+    canonical_forms = {}
+    
+    for i, config in enumerate(unique_configs):
+        canonical = get_canonical_form(config, symmetry_ops, system_size)
+        
+        if canonical in canonical_forms:
+            equal_pairs.append((i+1, canonical_forms[canonical]+1))
+        else:
+            canonical_forms[canonical] = i
+    
+    # Return verification results
+    if equal_pairs:
+        return {
+            "status": "failed", 
+            "message": f"Found {len(equal_pairs)} pairs of equivalent configurations",
+            "equal_pairs": equal_pairs,
+            "expected_unique": expected_unique,
+            "actual_unique": len(unique_configs)
+        }
+    elif len(unique_configs) != expected_unique:
+        return {
+            "status": "failed",
+            "message": f"Expected {expected_unique} unique configurations (Burnside's lemma), but found {len(unique_configs)}",
+            "equal_pairs": [],
+            "expected_unique": expected_unique,
+            "actual_unique": len(unique_configs)
+        }
+    else:
+        return {
+            "status": "success",
+            "message": f"All {len(unique_configs)} configurations are unique and match Burnside's lemma prediction",
+            "equal_pairs": [],
+            "expected_unique": expected_unique,
+            "actual_unique": len(unique_configs)
+        }
 
 def generate_files(cs_configs: List[List[Coordinate]], system_size=2):
     """Generate CIF files and plots for all configurations."""
@@ -507,110 +661,6 @@ ${atom_positions}''').substitute(
         with open(filename, "w") as f:
             f.write(cif_content)
 
-def normalize_for_system(x: float, system_size=2) -> float:
-    """Normalize coordinate based on the system size.
-    
-    For 2x2x2 system, normalize x to 0.25 or 0.75
-    For 3x3x3 system, normalize to 1/6, 3/6, 5/6
-    """
-    if system_size == 2:
-        # For 2x2x2, we have 0.25 and 0.75 as possible x values
-        return 0.25 if abs(x - 0.25) < abs(x - 0.75) else 0.75
-    elif system_size == 3:
-        # For 3x3x3, we have values at 1/6, 3/6, 5/6
-        possible_values = [1/6, 3/6, 5/6]
-        distances = [abs(x - val) for val in possible_values]
-        return possible_values[distances.index(min(distances))]
-    else:
-        # Default behavior for other system sizes
-        return x
-
-def verify_uniqueness(unique_configs: List[List[Coordinate]], system_size=2) -> dict:
-    """Verify that the configurations are all unique and non-equivalent under symmetry.
-    
-    This function performs several checks:
-    1. No two configurations are equivalent under symmetry operations
-    2. Each configuration has the expected number of atoms
-    3. Sampling validation against Burnside's lemma for small cases
-    
-    Args:
-        unique_configs: List of configurations to verify
-        system_size: Size of the system (2 for 2x2x2, 3 for 3x3x3)
-    
-    Returns:
-        Dict with verification results
-    """
-    if not unique_configs:
-        return {
-            "status": "failed",
-            "message": "No configurations to verify",
-            "equal_pairs": []
-        }
-    
-    # Get symmetry operations
-    symmetry_ops = get_symmetry_operations()
-    
-    # Check that all configurations have the same number of atoms
-    num_cs = len(unique_configs[0])
-    if not all(len(config) == num_cs for config in unique_configs):
-        return {
-            "status": "failed",
-            "message": "Not all configurations have the same number of atoms",
-            "equal_pairs": []
-        }
-    
-    # Check for duplicates/equivalent configurations
-    equal_pairs = []
-    canonical_forms = {}
-    
-    # For each configuration, compute its canonical form
-    for i, config in enumerate(unique_configs):
-        canonical = get_canonical_form(config, symmetry_ops, system_size)
-        
-        # Check if we've seen this canonical form before
-        if canonical in canonical_forms:
-            equal_pairs.append((i+1, canonical_forms[canonical]+1))
-        else:
-            canonical_forms[canonical] = i
-    
-    # Check for known special cases
-    total_positions = 27 if system_size == 3 else 8
-    if num_cs == 0 or num_cs == total_positions:
-        expected_unique = 1
-    elif num_cs == 1 or num_cs == total_positions - 1:
-        # For 1 atom or 1 vacancy, we expect the orbits of a single position
-        # This is well-known in group theory for highly symmetric spaces like this
-        expected_unique = 2 if system_size == 2 else 4  # Correct for O_h symmetry
-    else:
-        # We're already computing uniqueness with the canonical form approach
-        expected_unique = len(unique_configs)
-    
-    # Return verification results
-    if equal_pairs:
-        return {
-            "status": "failed",
-            "message": f"Found {len(equal_pairs)} pairs of equivalent configurations",
-            "equal_pairs": equal_pairs,
-            "expected_unique": expected_unique,
-            "actual_unique": len(unique_configs)
-        }
-    elif len(unique_configs) != expected_unique and (num_cs == 0 or num_cs == total_positions or num_cs == 1 or num_cs == total_positions - 1):
-        return {
-            "status": "failed",
-            "message": f"Expected {expected_unique} unique configurations for this special case, but found {len(unique_configs)}",
-            "equal_pairs": [],
-            "expected_unique": expected_unique,
-            "actual_unique": len(unique_configs)
-        }
-    else:
-        return {
-            "status": "success",
-            "message": f"All {len(unique_configs)} configurations are unique and pass verification",
-            "equal_pairs": [],
-            "expected_unique": expected_unique,
-            "actual_unique": len(unique_configs)
-        }
-
 def main():
     import sys
     import argparse
@@ -619,9 +669,9 @@ def main():
     parser = argparse.ArgumentParser(description="Generate unique crystal configurations using Burnside's lemma")
     parser.add_argument("-n", "--num_cs", type=int, default=4, help="Number of Cs atoms to place (default: 4)")
     parser.add_argument("-s", "--system_size", type=int, default=2, choices=[2, 3], help="System size (2 for 2x2x2, 3 for 3x3x3, default: 2)")
-    parser.add_argument("-p", "--parallel", action="store_true", help="Use parallelization for faster computation")
+    parser.add_argument("-p", "--parallel", action="store_true", help="Use parallelization (kept for compatibility)")
     parser.add_argument("-o", "--output_dir", default="result", help="Output directory for CIF files")
-    parser.add_argument("-v", "--verify", action="store_true", help="Verify uniqueness of generated configurations")
+    parser.add_argument("-v", "--verify", action="store_true", help="Verify uniqueness using Burnside's lemma")
     args = parser.parse_args()
     
     # Validate inputs
@@ -641,34 +691,27 @@ def main():
     
     # Print configuration
     print("=" * 60)
-    print(f"Generating {args.system_size}x{args.system_size}x{args.system_size} configurations")
+    print(f"CRYSTAL CONFIGURATION GENERATOR USING BURNSIDE'S LEMMA")
+    print("=" * 60)
+    print(f"System size: {args.system_size}x{args.system_size}x{args.system_size}")
     print(f"Number of Cs atoms: {args.num_cs}")
-    print(f"Parallelization: {'Enabled' if args.parallel else 'Disabled'}")
     print(f"Verification: {'Enabled' if args.verify else 'Disabled'}")
     print(f"Output directory: {args.output_dir}")
     print("=" * 60)
     
-    # Check for Python multiprocessing support
-    if args.parallel:
-        try:
-            import multiprocessing
-            print(f"Using {multiprocessing.cpu_count()} CPU cores")
-        except ImportError:
-            print("Warning: multiprocessing module not available. Running in single-process mode.")
-            args.parallel = False
-    
-    # Make the output directory the current result directory
+    # Make the output directory
     if args.output_dir != "result":
         os.makedirs(args.output_dir, exist_ok=True)
         
     # Generate unique configurations using Burnside's lemma
     configs = generate_unique_configurations(args.num_cs, args.system_size, args.parallel)
-    print(f"\nFound {len(configs)} unique configurations")
     
     if configs:
         # Verify uniqueness if requested
         if args.verify:
-            print("\nVerifying uniqueness of configurations...")
+            print("\n" + "=" * 60)
+            print("VERIFICATION USING BURNSIDE'S LEMMA")
+            print("=" * 60)
             verification_result = verify_uniqueness(configs, args.system_size)
             print(f"Verification status: {verification_result['status']}")
             print(f"Message: {verification_result['message']}")
@@ -686,9 +729,12 @@ def main():
                     sys.exit(1)
         
         # Generate files
+        print(f"\n" + "=" * 60)
+        print("GENERATING OUTPUT FILES")
+        print("=" * 60)
         generate_files(configs, args.system_size)
-        print("\nCompleted! Check:")
-        print(f"- '{args.output_dir}' directory for CIF files")
+        print(f"✓ Generated {len(configs)} CIF files in '{args.output_dir}' directory")
+        print("\nBurnside's lemma analysis complete!")
     else:
         print("\nNo valid configurations found. Check your parameters and try again.")
 

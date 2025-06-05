@@ -8,7 +8,7 @@ The scripts facilitate the generation of unique crystal structures, calculation 
 
 ## Repository Contents
 
-*   **`Structure_Generator.py`**: Generates unique perovskite crystal structure configurations by considering symmetry operations to eliminate redundant structures. Outputs CIF files.
+*   **`Structure_Generator.py`**:  Generates unique perovskite crystal structure configurations using Burnside's lemma to count symmetrically distinct arrangements, followed by canonical form enumeration to generate representative structures. Applies group theory with octahedral symmetry operations to eliminate redundant configurations and outputs CIF files for each unique structure.
 *   **`Bond_Angle_Calculation.py`**: Reads VASP output files (e.g., POSCAR, CONTCAR) to calculate and report specified bond angles (e.g., Pb-I-Pb).
 *   **`Calibration_Code.py`**: Processes UV-Vis spectroscopy data from various CSV/TXT formats. It performs calibration by fitting a linear regression model, calculates molar absorptivity, and can predict concentrations of unknown samples.
 *   **`Code_Tolerance_Factor.py`**: Computes the Goldschmidt tolerance factor for perovskite structures using `pymatgen` from CIF files. Outputs results to a CSV file and generates a plot.
