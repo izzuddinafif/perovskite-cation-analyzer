@@ -1,45 +1,70 @@
 graph TD
-    A["Start: Generate All Potential Configurations<br>(C<sub>1</sub>, C<sub>2</sub>, ..., C<sub>N</sub>)<br>e.g., using itertools.combinations"] --> B{"Loop: For each Potential Configuration C<sub>i</sub>"};
+    A["Start: Generate All Potential Configurations<br>(C<sub>1</sub>, C<sub>2</sub>, ..., C<sub>N</sub>)<br>e.g., using itertools.combinations"] --> B["STEP 1: Apply Burnside's Lemma<br>|X/G| = (1/|G|) × Σ|X<sup>g</sup>|"];
 
-    B --> C["Apply Full Set of Symmetry Operations G<br>(e.g., 48 ops for O<sub>h</sub> group) to C<sub>i</sub>"];
-    C --> D["Generate the Orbit of C<sub>i</sub>:<br>Consists of |G| transformed configurations<br>{g<sub>1</sub>(C<sub>i</sub>), g<sub>2</sub>(C<sub>i</sub>), ..., g<sub>|G|</sub>(C<sub>i</sub>)}"];
-
-    D --> E{"Loop: For each Transformed Configuration C'<sub>i,j</sub> in the Orbit"};
-    E --> F["1. Normalize Coordinates<br>(e.g., to [0,1) range, apply system-specific rules)"];
-    F --> G["2. Sort Normalized Coordinates<br>(e.g., lexicographically by x, then y, then z)"];
-    G --> H["Obtain Standardized Form S(C'<sub>i,j</sub>)"];
+    B --> C{"Loop: For each Symmetry Operation g ∈ G<br>(e.g., 48 operations for O<sub>h</sub> group)"};
+    C --> D["Count Fixed Points |X<sup>g</sup>|:<br>Configurations unchanged by operation g"];
+    D --> E{"Loop: For each Configuration C<sub>i</sub>"};
+    E --> F["Apply g to C<sub>i</sub>: g(C<sub>i</sub>)"];
+    F --> G{"Is g(C<sub>i</sub>) = C<sub>i</sub>?<br>(Configuration fixed by g?)"};
+    G -- Yes --> H["Increment Fixed Count"];
+    G -- No --> I["Continue to Next Configuration"];
     H --> E;
+    I --> E;
+    E -- "All C<sub>i</sub> processed" --> J["Store |X<sup>g</sup>| for this operation"];
+    J --> C;
 
-    E -- "All C'<sub>i,j</sub> in orbit processed" --> I["Select Lexicographically Smallest Standardized Form<br>as the Canonical Representative for C<sub>i</sub>'s Orbit:<br>C<sub>i,canonical</sub> = min{S(C'<sub>i,1</sub>), ..., S(C'<sub>i,|G|</sub>)}"];
+    C -- "All g ∈ G processed" --> K["Calculate: Total Fixed = Σ|X<sup>g</sup>|<br>Unique Count = Total Fixed / |G|"];
 
-    I --> J{"Is C<sub>i,canonical</sub> already in the<br>Set of Unique Canonical Forms Found So Far?"};
-    J -- No --> K["Add C<sub>i,canonical</sub> to Unique Set<br>Store Original C<sub>i</sub> (or C<sub>i,canonical</sub>)<br>as a Unique Structure Representative"];
-    J -- Yes --> L["Discard C<sub>i</sub><br>(Symmetrically Equivalent to an Already Found Unique Structure)"];
+    K --> L["STEP 2: Generate Representative Configurations<br>Using Canonical Form Enumeration"];
 
-    K --> B;
-    L --> B;
+    L --> M{"Loop: For each Potential Configuration C<sub>i</sub>"};
+    M --> N["Apply Full Set of Symmetry Operations G to C<sub>i</sub>"];
+    N --> O["Generate Orbit: {g<sub>1</sub>(C<sub>i</sub>), g<sub>2</sub>(C<sub>i</sub>), ..., g<sub>|G|</sub>(C<sub>i</sub>)}"];
+    O --> P["For each transformed configuration:<br>1. Normalize coordinates<br>2. Sort lexicographically"];
+    P --> Q["Select lexicographically smallest<br>as canonical representative C<sub>i,canonical</sub>"];
 
-    B -- "All Potential Configurations C<sub>i</sub> processed" --> M["End: Final Set of Unique<br>Structure Representatives Identified"];
+    Q --> R{"Is C<sub>i,canonical</sub> already in<br>unique representatives set?"};
+    R -- No --> S["Add to unique set"];
+    R -- Yes --> T["Discard (duplicate)"];
+    S --> M;
+    T --> M;
+
+    M -- "All C<sub>i</sub> processed" --> U["STEP 3: Verification"];
+    U --> V{"Does |Generated Representatives|<br>= Burnside's Lemma Count?"};
+    V -- Yes --> W["✓ Success: Generate CIF Files"];
+    V -- No --> X["✗ Error: Implementation Issue"];
+
+    W --> Y["End: Unique Structures Generated"];
+    X --> Z["End: Verification Failed"];
+
+    subgraph "Burnside's Lemma Formula"
+        direction TB
+        BL1["|X/G| = Number of Unique Orbits"]
+        BL2["X<sup>g</sup> = Configurations fixed by operation g"]
+        BL3["G = Group of symmetry operations"]
+        BL4["Formula: |X/G| = (1/|G|) × Σ<sub>g∈G</sub>|X<sup>g</sup>|"]
+    end
 
     subgraph Legend
         direction LR
-        Legend_Ci["C<sub>i</sub>: An initial (potential) atomic configuration"]
-        Legend_g["g<sub>j</sub> ∈ G: A symmetry operation from the point group G"]
-        Legend_Orbit["{g<sub>j</sub>(C<sub>i</sub>)}: The set of all configurations symmetrically equivalent to C<sub>i</sub> (its orbit)"]
-        Legend_S_Cij["S(C'<sub>i,j</sub>): Standardized form (normalized & sorted) of a transformed configuration"]
-        Legend_Ccanon["C<sub>i,canonical</sub>: The unique canonical representative chosen for the orbit of C<sub>i</sub>"]
+        Legend_Xi["X<sup>g</sup>: Set of configurations fixed by operation g"]
+        Legend_g["g ∈ G: Symmetry operation from point group"]
+        Legend_Canonical["C<sub>canonical</sub>: Lexicographically smallest representative"]
+        Legend_Orbit["Orbit: All symmetrically equivalent configurations"]
     end
 
     classDef startEnd fill:#C9DAF8,stroke:#333,stroke-width:2px,font-weight:bold;
-    classDef process fill:#E2F0D9,stroke:#333,stroke-width:1px;
+    classDef burnside fill:#E1D5E7,stroke:#9673A6,stroke-width:2px,font-weight:bold;
+    classDef canonical fill:#E2F0D9,stroke:#333,stroke-width:1px;
     classDef decision fill:#FCE5CD,stroke:#333,stroke-width:2px;
-    classDef unique fill:#D5E8D4,stroke:#277722,stroke-width:2px;
-    classDef discard fill:#F8CECC,stroke:#A0302A,stroke-width:2px;
-    classDef loop fill:#FFF2CC,stroke:#D6B656,stroke-width:1px;
+    classDef success fill:#D5E8D4,stroke:#277722,stroke-width:2px;
+    classDef error fill:#F8CECC,stroke:#A0302A,stroke-width:2px;
+    classDef verification fill:#FFF2CC,stroke:#D6B656,stroke-width:2px;
 
-    class A,M startEnd;
-    class C,D,F,G,H,I process;
-    class J decision;
-    class K unique;
-    class L discard;
-    class B,E loop;
+    class A,Y,Z startEnd;
+    class B,C,D,K burnside;
+    class L,M,N,O,P,Q canonical;
+    class G,R,V decision;
+    class W success;
+    class X error;
+    class U verification;
