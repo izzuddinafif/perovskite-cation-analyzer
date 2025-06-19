@@ -56,6 +56,6 @@ Default output directories include `result/` (for `Structure_Generator.py`) and 
 
 ## Citation
 
-If you find the tools in this repository useful for your research, please consider citing the following paper:
+If you find the tools in this repository useful for your research, please consider raeading and citing the following paper:
 
 > "Unveiling the Impact of Nanoscale Cation Arrangement on Bandgap Tunability and Structural Stability in Cs<sub>0.5</sub>A<sub>0.5</sub>PbI<sub>3</sub> (A = FA+, MA+) Perovskites." [https://doi.org/10.1021/acs.jpcc.5c02893](https://doi.org/10.1021/acs.jpcc.5c02893)
