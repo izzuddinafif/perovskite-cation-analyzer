@@ -53,3 +53,9 @@ Many scripts generate output files, such as:
 *   `.npz` files for numerical strain data.
 
 Default output directories include `result/` (for `Structure_Generator.py`) and `strain_analysis/` (for `Strain_Calculation_Code.py`). These are included in `.gitignore`.
+
+## Citation
+
+If you find the tools in this repository useful for your research, please consider citing the following paper, which details the research for which these tools were developed:
+
+> "Unveiling the Impact of Nanoscale Cation Arrangement on Bandgap Tunability and Structural Stability in Cs<sub>0.5</sub>A<sub>0.5</sub>PbI<sub>3</sub> (A = FA+, MA+) Perovskites." [https://doi.org/10.1021/acs.jpcc.5c02893](https://doi.org/10.1021/acs.jpcc.5c02893)
